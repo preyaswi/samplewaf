@@ -1,5 +1,6 @@
 package main
 
+// you can ignore this file  .....
 import (
 	"bytes"
 	"context"
@@ -54,7 +55,7 @@ const (
 	blockDuration        = 1 * time.Minute
 )
 
-type WAFLog struct {
+type WAFEvent struct {
 	Timestamp string   `json:"timestamp"`
 	IP        string   `json:"ip"`
 	Method    string   `json:"method"`
@@ -143,6 +144,8 @@ func wafHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	score, matches := inspectRequest(r)
+	fmt.Println(score)
+	fmt.Println(matches)
 
 	action := "allow"
 
@@ -176,7 +179,7 @@ func wafHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Matched Rules: %v", matches)
 	}
 
-	logEntry := WAFLog{
+	logEntry := WAFEvent{
 
 		Timestamp: time.Now().Format(time.RFC3339),
 		IP:        r.RemoteAddr,
@@ -263,7 +266,7 @@ func normalize(input string) string {
 	return input
 }
 
-func sendLogToElasticsearch(logentry WAFLog) {
+func sendLogToElasticsearch(logentry WAFEvent) {
 	data, err := json.Marshal(logentry)
 	if err != nil {
 		log.Println("JSON marshal error:", err)
@@ -281,7 +284,11 @@ func sendLogToElasticsearch(logentry WAFLog) {
 		return
 	}
 
-	defer res.Body.Close()
+	defer func() {
+		if closeErr := res.Body.Close(); closeErr != nil {
+			log.Println("Error closing response body:", closeErr)
+		}
+	}()
 
 	log.Println("Log sent to Elasticsearch")
 
@@ -295,20 +302,20 @@ func getIp(r *http.Request) string {
 	return ip
 }
 
-func checkRateLimitwithgo(ctx context.Context, ip string) bool {
-	key := "rate_limit:" + ip
+// func checkRateLimitwithgo(ctx context.Context, ip string) bool {
+// 	key := "rate_limit:" + ip
 
-	count, err := rdb.Incr(ctx, key).Result()
+// 	count, err := rdb.Incr(ctx, key).Result()
 
-	if err != nil {
-		return true
-	}
+// 	if err != nil {
+// 		return true
+// 	}
 
-	if count == 1 {
-		rdb.Expire(ctx, key, rateLimitWindow)
-	}
-	return count <= rateLimitRequests
-}
+// 	if count == 1 {
+// 		rdb.Expire(ctx, key, rateLimitWindow)
+// 	}
+// 	return count <= rateLimitRequests
+// }
 
 func checkRateLimit(ctx context.Context, ip string) bool {
 	key := "rate_limit:" + ip
@@ -324,3 +331,9 @@ func checkRateLimit(ctx context.Context, ip string) bool {
 
 	return res == 1
 }
+
+//ZERO LOGGING USING MIDDLEWARE -FOR TRSASMITING TO ELASTIC SEARCH,
+//CLEARNUP
+
+//REDIS AS ADAPTER
+//WORKER GROUP - GOLANG

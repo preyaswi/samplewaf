@@ -1,87 +1,31 @@
 # Sample WAF (Web Application Firewall)
 
-A simple learning-focused Web Application Firewall (WAF) built using Go, Redis, and Elasticsearch.
+A learning-focused Web Application Firewall (WAF) built using Go, Redis, Elasticsearch, and Docker.
 
-This project demonstrates:
+The project demonstrates how a modern reverse-proxy based WAF can perform:
 
-* Reverse proxy based request flow
-* Basic WAF rule inspection
-* SQL Injection/XSS/Path Traversal detection
-* Request scoring system
-* Redis-based rate limiting
-* Temporary IP blocking
-* Redis Functions (Lua)
-* Elasticsearch logging
-* Docker-based local infrastructure
-
----
-
-# Architecture
-
-```mermaid
-flowchart LR
-    Client --> WAF
-    WAF --> Redis
-    WAF --> Elasticsearch
-    WAF --> Backend
-
-    Redis -->|Rate Limit / Temp Block| WAF
-    Elasticsearch -->|Logs & Search| Kibana
-```
-
----
-
-# Request Flow
-
-```mermaid
-sequenceDiagram
-    actor User
-
-    participant WAF
-    participant Redis
-    participant ES as Elasticsearch
-    participant Backend
-
-    User->>WAF: HTTP Request
-
-    WAF->>Redis: FCALL rate_limit
-    Redis-->>WAF: allow/block
-
-    alt Rate Limit Exceeded
-        WAF-->>User: 429 Too Many Requests
-    else Allowed
-
-        WAF->>WAF: Inspect Request
-
-        alt Malicious Request
-            WAF->>Redis: Increment Attack Counter
-            WAF->>ES: Store WAF Log
-            WAF-->>User: 403 Forbidden
-
-        else Normal Request
-            WAF->>Backend: Forward Request
-            Backend-->>WAF: Response
-            WAF->>ES: Store WAF Log
-            WAF-->>User: Response
-        end
-    end
-```
+- Request inspection
+- Rate limiting
+- Temporary IP blocking
+- Attack detection
+- Structured logging
+- Asynchronous log processing
+- Elasticsearch integration
+- Unit testing with mocks
 
 ---
 
 # Features
 
-## 1. Reverse Proxy WAF
+## Reverse Proxy
 
-The WAF acts as a reverse proxy.
+Acts as a reverse proxy in front of backend services.
 
-All incoming requests:
+```text
+Client -> WAF -> Backend
+```
 
-* First hit the WAF
-* Get inspected
-* Then forwarded to backend if safe
-
-Implemented using:
+Built using:
 
 ```go
 httputil.NewSingleHostReverseProxy()
@@ -89,77 +33,78 @@ httputil.NewSingleHostReverseProxy()
 
 ---
 
-## 2. Rule Based Detection
+## Attack Detection
 
-The WAF checks requests against regex-based rules.
+The WAF inspects:
 
-Current rules:
+- URL Path
+- Query Parameters
+- Request Body
+- Headers
 
-| Attack Type    | Example                  |
-| -------------- | ------------------------ |
-| SQL Injection  | `OR 1=1`, `UNION SELECT` |
-| XSS            | `<script>`               |
-| Path Traversal | `../`                    |
+Supported detections:
 
-Each rule increases a request score.
+| Attack Type | Example |
+|-------------|----------|
+| SQL Injection | OR 1=1 |
+| XSS | <script> |
+| Path Traversal | ../ |
 
 ---
 
-## 3. Scoring System
+## Request Scoring
 
-Each matched attack rule adds score:
+Every rule contributes to a score.
 
-| Rule           | Score |
-| -------------- | ----- |
-| SQL Injection  | 50    |
-| XSS            | 50    |
-| Path Traversal | 40    |
+| Rule | Score |
+|--------|--------|
+| SQL Injection | 50 |
+| XSS | 50 |
+| Path Traversal | 40 |
 
-If:
+Requests are blocked when:
 
 ```text
-score >= 50
-```
-
-The request is blocked.
-
----
-
-## 4. Redis Rate Limiting
-
-Redis is used for:
-
-* Request counters
-* Rate limiting
-* Temporary IP blocking
-* Fast in-memory state management
-
-Rate limiting flow:
-
-```mermaid
-flowchart TD
-    Request --> RedisFunction
-    RedisFunction --> IncrementCounter
-    IncrementCounter --> CheckLimit
-
-    CheckLimit -->|Allowed| Backend
-    CheckLimit -->|Exceeded| Block429
+Score >= 50
 ```
 
 ---
 
-# Redis Function
+## Redis-Based Rate Limiting
 
-A Redis Lua Function is used for atomic rate limiting.
+The WAF uses Redis for:
 
-Function responsibilities:
+- Rate limiting
+- Temporary IP blocking
+- Attack counters
+- Fast in-memory state
 
-* Increment request count
-* Set expiration
-* Validate request limit
-* Return allow/block decision
+Current configuration:
 
-Example:
+```text
+20 requests / 60 seconds
+```
+
+Exceeded requests receive:
+
+```http
+429 Too Many Requests
+```
+
+---
+
+## Redis Functions
+
+Rate limiting logic runs directly inside Redis using Redis Functions.
+
+Benefits:
+
+- Atomic execution
+- Reduced network calls
+- Faster processing
+- Production-style architecture
+
+### Function
 
 ```lua
 #!lua name=waflib
@@ -189,45 +134,224 @@ redis.register_function(
 
 ---
 
-# Why Redis Function?
+## Temporary IP Blocking
 
-Instead of:
+Malicious requests increment an attack counter.
+
+After multiple malicious attempts:
 
 ```text
-Go App -> INCR
-Go App -> EXPIRE
-Go App -> Check Count
+3 attacks -> IP blocked for 1 minute
 ```
 
-The Redis Function performs everything atomically inside Redis.
+Redis stores:
 
-Benefits:
-
-* Fewer network calls
-* Faster execution
-* Atomic operations
-* Better scalability
-* Production-style architecture
+```text
+attacks:<ip>
+blocked:<ip>
+```
 
 ---
 
-# Elasticsearch Logging
+## Structured Logging
 
-All requests are logged into Elasticsearch.
+The project uses:
 
-Stored information:
+```text
+zerolog
+```
 
-* Timestamp
-* IP
-* Method
-* Path
-* Query
-* Score
-* Action
-* Matched Rules
-* User Agent
+for structured application logs.
 
-Example index:
+Example:
+
+```json
+{
+  "level":"info",
+  "method":"GET",
+  "path":"/login",
+  "score":50,
+  "message":"request inspected"
+}
+```
+
+---
+
+## Asynchronous Log Processing
+
+Instead of writing directly to Elasticsearch during request processing:
+
+```text
+Request
+  ↓
+Channel
+  ↓
+Worker Pool
+  ↓
+Elasticsearch
+```
+
+This prevents Elasticsearch latency from affecting request handling.
+
+---
+
+# Architecture
+
+```mermaid
+flowchart LR
+
+    Client --> WAF
+
+    WAF --> Redis
+    WAF --> Backend
+
+    WAF --> LogChannel
+
+    LogChannel --> Worker1
+    LogChannel --> Worker2
+    LogChannel --> Worker3
+    LogChannel --> Worker4
+    LogChannel --> Worker5
+
+    Worker1 --> Elasticsearch
+    Worker2 --> Elasticsearch
+    Worker3 --> Elasticsearch
+    Worker4 --> Elasticsearch
+    Worker5 --> Elasticsearch
+
+    Elasticsearch --> Kibana
+```
+
+---
+
+# Request Flow
+
+```mermaid
+sequenceDiagram
+
+    actor User
+
+    participant WAF
+    participant Redis
+    participant Backend
+    participant Channel
+    participant Worker
+    participant ES as Elasticsearch
+
+    User->>WAF: HTTP Request
+
+    WAF->>Redis: FCALL rate_limit
+
+    Redis-->>WAF: allow/block
+
+    alt Rate Limit Exceeded
+
+        WAF-->>User: 429 Too Many Requests
+
+    else Allowed
+
+        WAF->>WAF: Inspect Request
+
+        alt Malicious Request
+
+            WAF->>Redis: Increment Attack Counter
+
+            WAF->>Channel: Push WAF Event
+
+            Channel->>Worker: Process Event
+
+            Worker->>ES: Store Event
+
+            WAF-->>User: 403 Forbidden
+
+        else Normal Request
+
+            WAF->>Backend: Forward Request
+
+            Backend-->>WAF: Response
+
+            WAF->>Channel: Push WAF Event
+
+            Channel->>Worker: Process Event
+
+            Worker->>ES: Store Event
+
+            WAF-->>User: Response
+
+        end
+    end
+```
+
+---
+
+# Project Structure
+
+```text
+samplewaf/
+
+├── cmd/
+│   └── waf/
+│       └── main.go
+
+├── internal/
+│   ├── adapters/
+│   │   ├── redis.go
+│   │   └── elasticsearch.go
+│   │
+│   ├── config/
+│   │   └── config.go
+│   │
+│   ├── middleware/
+│   │   └── logging.go
+│   │
+│   ├── models/
+│   │   └── waf_event.go
+│   │
+│   ├── proxy/
+│   │   └── proxy.go
+│   │
+│   ├── utils/
+│   │   └── ip.go
+│   │
+│   ├── waf/
+│   │   ├── handler.go
+│   │   ├── rules.go
+│   │   ├── inspector.go
+│   │   ├── handler_test.go
+│   │   └── mock_test.go
+│   │
+│   └── workers/
+│       └── elastic_worker.go
+│
+├── scripts/
+│   └── rate_limit.lua
+│
+├── backend/
+│   └── main.go
+│
+└── README.md
+```
+
+---
+
+# Elasticsearch Events
+
+The WAF stores events such as:
+
+```json
+{
+  "timestamp":"2026-06-01T14:32:03Z",
+  "ip":"127.0.0.1",
+  "method":"GET",
+  "path":"/login",
+  "score":50,
+  "action":"block",
+  "rules":["SQL Injection"],
+  "user_agent":"curl/8.5.0"
+}
+```
+
+Index:
 
 ```text
 waf-logs
@@ -235,22 +359,7 @@ waf-logs
 
 ---
 
-# Docker Setup
-
-## Run Elasticsearch
-
-```bash
-docker run -d \
-  --name elasticsearch \
-  -p 9200:9200 \
-  -e "discovery.type=single-node" \
-  -e "xpack.security.enabled=false" \
-  docker.elastic.co/elasticsearch/elasticsearch:8.13.4
-```
-
----
-
-## Run Redis
+# Running Redis
 
 ```bash
 docker run -d \
@@ -264,7 +373,7 @@ docker run -d \
 # Load Redis Function
 
 ```bash
-cat rate_limit.lua | docker exec -i redis redis-cli -x FUNCTION LOAD REPLACE
+cat scripts/rate_limit.lua | docker exec -i redis redis-cli -x FUNCTION LOAD REPLACE
 ```
 
 Verify:
@@ -279,13 +388,26 @@ FUNCTION LIST
 
 ---
 
-# Run Backend Server
+# Running Elasticsearch
 
 ```bash
-go run backend.go
+docker run -d \
+  --name elasticsearch \
+  -p 9200:9200 \
+  -e "discovery.type=single-node" \
+  -e "xpack.security.enabled=false" \
+  docker.elastic.co/elasticsearch/elasticsearch:8.13.4
 ```
 
-Backend runs on:
+---
+
+# Run Backend
+
+```bash
+go run backend/main.go
+```
+
+Runs on:
 
 ```text
 localhost:8081
@@ -296,10 +418,10 @@ localhost:8081
 # Run WAF
 
 ```bash
-go run main.go
+go run cmd/waf/main.go
 ```
 
-WAF runs on:
+Runs on:
 
 ```text
 localhost:8080
@@ -309,93 +431,72 @@ localhost:8080
 
 # Testing
 
-## Normal Request
+Run all tests:
 
 ```bash
-curl http://localhost:8080
+go test ./...
 ```
 
----
-
-## SQL Injection Test
+Run WAF tests only:
 
 ```bash
-curl "http://localhost:8080/login?user=admin%27%20OR%201%3D1--"
+go test ./internal/waf
 ```
 
-Expected:
+Current test coverage includes:
 
-```text
-403 Forbidden
-```
-
----
-
-## Rate Limit Test
-
-```bash
-for i in {1..25}; do curl http://localhost:8080; done
-```
-
-Expected after threshold:
-
-```text
-429 Too Many Requests
-```
-
----
-
-# Redis Concepts Learned
-
-This project demonstrates:
-
-| Concept           | Usage                 |
-| ----------------- | --------------------- |
-| Strings           | Counters              |
-| TTL               | Rate limit expiry     |
-| Redis Functions   | Atomic logic          |
-| In-memory storage | Fast request handling |
-| Persistence       | Optional durability   |
+- Rate limiting
+- Blocked IPs
+- SQL Injection detection
+- XSS detection
+- Path traversal detection
+- Normal requests
 
 ---
 
 # Future Improvements
 
-Possible upgrades:
-
-* JWT validation
-* GeoIP blocking
-* Redis Streams
-* Pub/Sub alerting
-* Kibana dashboard
-* Rule management API
-* Distributed WAF nodes
-* IP reputation system
-* Sliding window rate limiting
-* Machine learning anomaly detection
+- Sliding Window Rate Limiter
+- Redis Streams
+- Pub/Sub Alerts
+- GeoIP Blocking
+- JWT Validation
+- Kibana Dashboards
+- Dynamic Rule Management
+- Distributed WAF Nodes
+- IP Reputation Scoring
+- Machine Learning Anomaly Detection
 
 ---
 
 # Tech Stack
 
-| Component        | Technology    |
-| ---------------- | ------------- |
-| Language         | Go            |
-| Cache / State    | Redis         |
-| Search / Logs    | Elasticsearch |
-| Containerization | Docker        |
-| Reverse Proxy    | Go net/http   |
+| Component | Technology |
+|------------|------------|
+| Language | Go |
+| Cache | Redis |
+| Search & Analytics | Elasticsearch |
+| Logging | Zerolog |
+| Reverse Proxy | net/http |
+| Testing | Testify |
+| Containerization | Docker |
 
 ---
 
-# Learning Outcome
+# Learning Outcomes
 
-This project helps understand:
+This project covers:
 
-* WAF request lifecycle
-* Reverse proxy architecture
-* Redis-based rate limiting
-* Atomic backend operations
-* Elasticsearch logging pipeline
-* Dockerized infrastructure
-* Production-inspired backend patterns
+- Reverse Proxy Architecture
+- WAF Request Lifecycle
+- Redis Data Structures
+- Redis Functions
+- Rate Limiting Strategies
+- Temporary IP Blocking
+- Worker Pools
+- Structured Logging
+- Elasticsearch Integration
+- Dependency Injection
+- Interface-Based Design
+- Unit Testing with Mocks
+- Dockerized Development Environment
